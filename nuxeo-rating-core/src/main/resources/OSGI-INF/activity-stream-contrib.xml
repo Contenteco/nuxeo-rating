@@ -1,0 +1,26 @@
+<component name="org.nuxeo.ecm.rating.activity.stream">
+
+  <require>org.nuxeo.ecm.activity.web.contrib</require>
+
+  <extension target="org.nuxeo.ecm.activity.ActivityStreamService"
+             point="activityStreams">
+
+    <activityStream name="defaultDocumentActivityStream">
+      <verbs append="true">
+        <verb>like</verb>
+        <verb>dislike</verb>
+      </verbs>
+    </activityStream>
+
+  </extension>
+
+  <extension target="org.nuxeo.ecm.activity.ActivityStreamService"
+             point="activityVerbs">
+
+    <activityVerb verb="like"
+      labelKey="label.activity.liked"
+      icon="/icons/activity_like.png" />
+
+  </extension>
+
+</component>

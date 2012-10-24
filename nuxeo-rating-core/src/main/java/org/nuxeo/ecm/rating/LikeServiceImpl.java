@@ -19,13 +19,14 @@ package org.nuxeo.ecm.rating;
 
 import static org.nuxeo.ecm.activity.ActivityHelper.createDocumentActivityObject;
 import static org.nuxeo.ecm.activity.ActivityHelper.createUserActivityObject;
+import static org.nuxeo.ecm.core.schema.FacetNames.SUPER_SPACE;
 import static org.nuxeo.ecm.rating.LikesCountActivityStreamFilter.ACTOR_PARAMETER;
 import static org.nuxeo.ecm.rating.LikesCountActivityStreamFilter.CONTEXT_PARAMETER;
 import static org.nuxeo.ecm.rating.LikesCountActivityStreamFilter.FROMDT_PARAMETER;
 import static org.nuxeo.ecm.rating.LikesCountActivityStreamFilter.OBJECT_PARAMETER;
-import static org.nuxeo.ecm.rating.LikesCountActivityStreamFilter.TODT_PARAMETER;
 import static org.nuxeo.ecm.rating.LikesCountActivityStreamFilter.QueryType.GET_DOCUMENTS_COUNT;
 import static org.nuxeo.ecm.rating.LikesCountActivityStreamFilter.QueryType.GET_MINI_MESSAGE_COUNT;
+import static org.nuxeo.ecm.rating.LikesCountActivityStreamFilter.TODT_PARAMETER;
 import static org.nuxeo.ecm.rating.RatingActivityStreamFilter.QUERY_TYPE_PARAMETER;
 import static org.nuxeo.ecm.rating.api.Constants.LIKE_ASPECT;
 import static org.nuxeo.ecm.rating.api.LikeStatus.DISLIKED;
@@ -33,18 +34,29 @@ import static org.nuxeo.ecm.rating.api.LikeStatus.LIKED;
 import static org.nuxeo.ecm.rating.api.LikeStatus.UNKNOWN;
 
 import java.io.Serializable;
+import java.security.Principal;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.nuxeo.ecm.activity.ActivitiesList;
 import org.nuxeo.ecm.activity.ActivitiesListImpl;
 import org.nuxeo.ecm.activity.Activity;
+import org.nuxeo.ecm.activity.ActivityBuilder;
+import org.nuxeo.ecm.activity.ActivityHelper;
 import org.nuxeo.ecm.activity.ActivityStreamService;
+import org.nuxeo.ecm.core.api.ClientException;
 import org.nuxeo.ecm.core.api.CoreSession;
 import org.nuxeo.ecm.core.api.DocumentModel;
+import org.nuxeo.ecm.core.api.DocumentRef;
+import org.nuxeo.ecm.core.api.UnrestrictedSessionRunner;
+import org.nuxeo.ecm.platform.usermanager.UserManager;
 import org.nuxeo.ecm.rating.api.LikeService;
 import org.nuxeo.ecm.rating.api.LikeStatus;
 import org.nuxeo.ecm.rating.api.RatingService;
@@ -58,6 +70,12 @@ import org.nuxeo.runtime.model.DefaultComponent;
  * @since 5.6
  */
 public class LikeServiceImpl extends DefaultComponent implements LikeService {
+
+    private static final Log log = LogFactory.getLog(LikeServiceImpl.class);
+
+    public static final String LIKE_VERB = "like";
+
+    public static final String DISLIKE_VERB = "dislike";
 
     public static final int LIKE_RATING = 1;
 
@@ -73,6 +91,8 @@ public class LikeServiceImpl extends DefaultComponent implements LikeService {
     @Override
     public void like(String username, DocumentModel doc) {
         like(username, createDocumentActivityObject(doc));
+        // add like activities for the doc
+        addLikeActivities(username, doc);
     }
 
     @Override
@@ -111,6 +131,8 @@ public class LikeServiceImpl extends DefaultComponent implements LikeService {
     @Override
     public void dislike(String username, DocumentModel doc) {
         dislike(username, createDocumentActivityObject(doc));
+        // add dislike activities for the doc
+        addDislikeActivities(username, doc);
     }
 
     @Override
@@ -222,4 +244,66 @@ public class LikeServiceImpl extends DefaultComponent implements LikeService {
             int limit, DocumentModel source) {
         return getMostLikedActivities(session, limit, source, null, null);
     }
+
+    private void addLikeActivities(String username, DocumentModel doc) {
+        addActivities(LIKE_VERB, username, doc);
+    }
+
+    private void addDislikeActivities(String username, DocumentModel doc) {
+        addActivities(DISLIKE_VERB, username, doc);
+    }
+
+    private void addActivities(String verb, String username, DocumentModel doc) {
+        try {
+            Principal principal = Framework.getLocalService(UserManager.class).getPrincipal(
+                    username);
+            if (principal == null) {
+                return;
+            }
+
+            ActivityStreamService activityStreamService = Framework.getLocalService(ActivityStreamService.class);
+            Activity activity = toActivity(verb, principal, doc);
+            activityStreamService.addActivity(activity);
+
+            for (DocumentRef docRef : getParentSuperSpaceRefs(doc)) {
+                String context = ActivityHelper.createDocumentActivityObject(
+                        doc.getRepositoryName(), docRef.toString());
+                activityStreamService.addActivity(new ActivityBuilder(activity).context(
+                        context).build());
+            }
+        } catch (ClientException e) {
+            log.error(String.format("Error while adding like activities: %s",
+                    e.getMessage()));
+            if (log.isDebugEnabled()) {
+                log.debug(e, e);
+            }
+        }
+    }
+
+    private Activity toActivity(String verb, Principal principal,
+            DocumentModel doc) {
+        return new ActivityBuilder().actor(
+                ActivityHelper.createUserActivityObject(principal)).displayActor(
+                ActivityHelper.generateDisplayName(principal)).verb(verb).object(
+                ActivityHelper.createDocumentActivityObject(doc)).displayObject(
+                ActivityHelper.getDocumentTitle(doc)).build();
+    }
+
+    private List<DocumentRef> getParentSuperSpaceRefs(final DocumentModel doc)
+            throws ClientException {
+        final List<DocumentRef> parents = new ArrayList<DocumentRef>();
+        new UnrestrictedSessionRunner(doc.getRepositoryName()) {
+            @Override
+            public void run() throws ClientException {
+                List<DocumentModel> parentDocuments = session.getParentDocuments(doc.getRef());
+                for (DocumentModel parent : parentDocuments) {
+                    if (parent.hasFacet(SUPER_SPACE)) {
+                        parents.add(parent.getRef());
+                    }
+                }
+            }
+        }.runUnrestricted();
+        return parents;
+    }
+
 }
